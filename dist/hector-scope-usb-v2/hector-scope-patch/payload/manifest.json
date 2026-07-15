@@ -1,0 +1,26 @@
+{
+  "replace": {
+    "module_info.py": {"baseline": "86171480bf644feccecda7de518fb21953a2b8c34343f40d5386d012ea15a0be", "patched": "655f576389b940d5fb1727a3f748801418b42a99e9b187b35580b06fa92c0493", "critical": true},
+    "show_widget.py": {"baseline": "135e3fc0b8d7120afb77a442c7cc3d204a98017b4f0b0d4bb2a0db8512600654", "patched": "f0416fe1913f9a7b2a05a2acdebc33a4db71f70a0cfca86a3aa0dd4db0a2508b", "critical": true},
+    "ingen_wrapper.py": {"baseline": "63ce37cb478b6a6b2c3bd18cc29753fd98d04bcc871a8c29ca1490560861db03", "patched": "9b25ecf85d90bc82b09079cdaabbfa89183656a75c8a13b7a473cd1e32c8bfd0", "critical": true},
+    "qml/PatchBayEffect.qml": {"baseline": "9c90fd898c70919dd1944efa9de455c7da40779b86cbd414c3256829a8434bef", "patched": "f30b4e85aceccfb5f45d1281ecaea3c51733b46b20380545b2a8ca1c049425c6", "critical": true},
+    "headless.py": {"baseline": "f89c86258c355c5866163a49cbefda356a5fe4e1a9c4d815ad96602fe1c68de0", "patched": "8c702411b4f3c792ba7eb424285cde71ab49e9abaac894bb0c6f315ad08c3194", "critical": false}
+  },
+  "new": {
+    "qml/Scope.qml": "6a305cfc0a5b542c42c5a4d2d8653a8f52ceefca6c79b1cbda85a2b6d129e6dc",
+    "qml/Polyscope.qml": "f2704c6c6be4b8f9bbc7f128b9d153573e1e3bbec9811246c5d2a7924ec6df88",
+    "scope_util.py": "285364536fe8c597cffe88620b5704f070723fdd0f7b6b8df0c03214a5f03a1b"
+  },
+  "lv2": {
+    "poly_scope.lv2": {
+      "poly_scope.so": "c98d75a64d63efa3e5d5a1c023cde2cd8ed634c9c40be7c86ec2e4679a771b7c",
+      "poly_scope.ttl": "e3c73651253a3ec23bcc64e4286e62bd098af83ac421ab5d7a8c6e5dd2623e52",
+      "manifest.ttl": "d877968b5ccd47a06630c07174c375698b2544902828ee8993ba73a36516223a"
+    },
+    "poly_scope2.lv2": {
+      "poly_scope2.so": "d8714cac2e0e2264c81e4916529b822e243d3ce9a8b75c8d086ba39d70aeb271",
+      "poly_scope2.ttl": "4354f7fa9fff08e61b780251399833247de2c3a94354ae8e877a45f5da227894",
+      "manifest.ttl": "4146624773ebc2d276ef3dfd991f0132ba401e39f6ef6fb5c063af9a3eff8740"
+    }
+  }
+}
