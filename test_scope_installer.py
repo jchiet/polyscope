@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 
-REPO = "/Users/nepanduke/Documents/CLAUDES FOLDER/HectorScope_scope_patch_handoff_2026-06-15"
+REPO = os.path.dirname(os.path.abspath(__file__))
 UI_SRC = os.path.join(REPO, "source", "polyeffects-src", "digit_ui")
 PAYLOAD = os.path.join(REPO, "dist", "hector-scope-usb-v2", "hector-scope-patch", "payload")
 INSTALLER = os.path.join(REPO, "dist", "hector-scope-usb-v2", "hector-scope-patch", "install_scope.py")
