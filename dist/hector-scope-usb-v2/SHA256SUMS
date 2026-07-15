@@ -1,4 +1,4 @@
-6e5737f3c9ef9ff7cd328d5e43a93c36c50f9efd1c155d233a94bf06fab8f1d6  ./README_USB_INSTALL.txt
+5e41864770287b268d9fbd7ebac04cd43e66a6498fa513daa6a11e69e5ca68ca  ./README_USB_INSTALL.txt
 23ceddf9e4335a5e43d52b57638c3474fd4f017a5ae6266b4fc411caa7845585  ./debug.sh
 f1c68625aea5bf6f80ef978034e8f1b0e012a8748f4bd354f9ac92e8cfd133e6  ./hector-scope-patch/install_scope.py
 8c702411b4f3c792ba7eb424285cde71ab49e9abaac894bb0c6f315ad08c3194  ./hector-scope-patch/payload/files/headless.py

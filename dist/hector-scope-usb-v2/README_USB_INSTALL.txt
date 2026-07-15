@@ -34,21 +34,25 @@ USB layout (copy everything to a FAT32 USB root):
 
 Install:
   1. Boot Hector normally on firmware 407.
-  2. Insert the USB drive.
-  3. Settings -> QA CHECK -> Run debug. (Press it ONCE and wait.)
-  4. Wait for the "SUCCESS ... installed and verified" message. The unit may
-     NOT power off by itself in the QA debug context -- that is expected.
-  5. Manually POWER OFF the unit, REMOVE the USB, then power on.
-     (Do not boot with the USB inserted. Do not press Run debug repeatedly.)
-  6. Add a "scope" module in the patch bay.
+  2. Insert the USB drive. THE INSTALLER RUNS AUTOMATICALLY -- no menu
+     interaction is needed. (Fallback if nothing happens within ~30s:
+     Settings -> QA CHECK -> Run debug, pressed ONCE.)
+  3. The unit REBOOTS ITSELF when the install finishes.
+  4. IMPORTANT: the moment the screen goes black (reboot starting),
+     REMOVE THE USB STICK. If it stays inserted, the unit re-runs the
+     installer on every boot and looks stuck in an update/reboot loop.
+     Nothing is damaged -- just remove the stick and let it boot.
+  5. Add a "scope" module in the patch bay.
 
-Note: the installer takes only a few seconds. It now uses a lock so that even
-if the debug runner launches it more than once, only one instance runs and the
-rest exit immediately. A completion marker makes repeat launches a no-op.
+Note: the installer takes only a few seconds. It uses a lock so that even if
+the runner launches it more than once, only one instance runs and the rest
+exit immediately. A completion marker makes repeat launches a no-op.
 
 If it reports a checksum mismatch and aborts:
   Your unit is untouched. Copy /usb_flash/hector_scope_install.log off the USB
   and share it so the package can be re-targeted for your exact firmware.
 
 Recovery (separate USB: hector-scope-recovery-usb-v2):
-  Settings -> QA CHECK -> Run debug. Restores backups and removes the plugin.
+  Same handling: insert the stick, it runs automatically, and the unit
+  reboots. Remove the stick as soon as the screen goes black. Restores the
+  backups and removes the plugin.

@@ -45,9 +45,15 @@ scope plugin, and a checksum-gated USB installer with full backup/recovery.
 2. Copy the **contents** of `hector-scope-usb-v2/` to the **root** of a
    FAT32 USB stick (so `debug.sh` and `hector-scope-patch/` sit at the top
    level).
-3. Insert the stick into Hector, then: **Settings → QA CHECK → Run debug.**
-4. Wait for the install to finish and the module to restart.
-5. Verify: open the scope module, go to **SETUP** — the footer must read
+3. Boot Hector normally, then insert the stick. **The installer runs
+   automatically** — no menu interaction needed. (Fallback if nothing
+   happens within ~30 s: Settings → QA CHECK → Run debug, pressed once.)
+4. The module **reboots itself** when the install finishes.
+5. ⚠️ **The moment the screen goes black, remove the USB stick.** If it
+   stays inserted, the module re-runs the installer on every boot and looks
+   stuck in an update/reboot loop. Nothing is damaged — remove the stick
+   and let it boot normally.
+6. Verify: open the scope module, go to **SETUP** — the footer must read
    **polyscope perf8**.
 
 The installer backs up every original file on the device *and* onto the USB
@@ -57,8 +63,9 @@ completely on any failure.
 ### Uninstall / recovery
 
 - The release also ships a **recovery USB** zip: prepare a stick the same
-  way and run it via QA CHECK to restore the pristine firmware-407 files
-  from any state.
+  way and insert it — it runs automatically, restores the pristine
+  firmware-407 files from any state, and reboots. Same rule: remove the
+  stick as soon as the screen goes black.
 - The install stick keeps a copy of the original files under
   `hector_scope_originals_backup/` as an extra safety net.
 
