@@ -99,7 +99,7 @@ for bundle, files in MANIFEST["lv2"].items():
         p = os.path.join(lv2, bundle, name)
         check(f"lv2/{bundle}/{name} installed + sha", os.path.isfile(p) and sha(p) == exp)
 check("Polyscope.qml installed", os.path.isfile(os.path.join(ui, "qml", "Polyscope.qml")))
-check("Scope.qml installed", os.path.isfile(os.path.join(ui, "qml", "Scope.qml")))
+check("legacy Scope.qml NOT installed", not os.path.isfile(os.path.join(ui, "qml", "Scope.qml")))
 js = os.path.join(ui, "qml", "module_info.js")
 check("module_info.js has scope", os.path.isfile(js) and "scope" in open(js).read())
 check("backups created", os.path.isdir(os.path.join(ui, ".hector_scope_backup_v2")))
@@ -172,13 +172,21 @@ shutil.rmtree(root)
 print("\n=== Test 6: clean reinstall from a prior version ===")
 root, ui, lv2 = fresh_sandbox()
 inst = load_installer(ui, lv2); inst.install(dry_run=False)
-# Simulate an older version + a locally diverged show_widget.py
+# Simulate an older version + a locally diverged show_widget.py + the
+# legacy Scope.qml that pre-v3a installs shipped
 open(os.path.join(ui, ".hector_scope_v2_done"), "w").write("OLD")
 with open(os.path.join(ui, "show_widget.py"), "a") as f:
     f.write("\n# stale line from older version\n")
+open(os.path.join(ui, "qml", "Scope.qml"), "w").write("// legacy leftover\n")
+os.makedirs(os.path.join(lv2, "poly_scope.lv2"), exist_ok=True)
+open(os.path.join(lv2, "poly_scope.lv2", "poly_scope.so"), "w").write("stale")
 inst2 = load_installer(ui, lv2)
 rc = inst2.install(dry_run=False)
 check("reinstall returns 0", rc == 0)
+check("legacy Scope.qml leftover removed on reinstall",
+      not os.path.isfile(os.path.join(ui, "qml", "Scope.qml")))
+check("legacy poly_scope.lv2 leftover removed on reinstall",
+      not os.path.isdir(os.path.join(lv2, "poly_scope.lv2")))
 for rel, info in MANIFEST["replace"].items():
     check(f"{rel} == patched after reinstall", sha(os.path.join(ui, rel)) == info["patched"])
 check("marker stamped to PACKAGE_VERSION",

@@ -272,10 +272,6 @@ Rectangle {
             patchStack.push("Tuner.qml", {"effect": effect_id});
             patch_bay.current_help_text = "" // Constants.help[""];
         }
-        else if (effect_type == "scope_legacy"){
-            patchStack.push("Scope.qml", {"effect": effect_id});
-            patch_bay.current_help_text = "" // Constants.help[""];
-        }
         else if (effect_type == "polyscope"){
             patchStack.push("Polyscope.qml", {"effect": effect_id});
             patch_bay.current_help_text = "" // Constants.help[""];

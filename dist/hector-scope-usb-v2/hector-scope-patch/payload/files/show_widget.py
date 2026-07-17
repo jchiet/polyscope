@@ -1,4 +1,4 @@
-import sys, time, json, os.path, os, subprocess, queue, threading, traceback, glob
+import sys, time, json, os.path, os, subprocess, queue, threading, traceback, glob, gc
 import shutil
 os.environ["QT_IM_MODULE"] = "qtvirtualkeyboard"
 from signal import signal, SIGINT, SIGTERM
@@ -260,24 +260,39 @@ class PatchBayNotify(QObject):
 
 
 class ScopeFrames(QObject):
-    # Pass the decoded frame to QML as a real array (QVariantList) instead of a
-    # JSON string. Avoids json.dumps here + JSON.parse in QML every frame.
-    frameChanged = Signal(str, "QVariantList")
+    # v3e: no per-frame signal and no container conversion. The UI's 33 ms
+    # render timer polls frameRevision() (an int — primitive conversion) and
+    # pulls fresh frames as a JSON string; JSON.parse then builds pure JS
+    # objects entirely inside the JS engine. The v3b-v3d logs proved the
+    # ~0.5 ms/s JS live-set growth follows frame delivery however the payload
+    # crosses the bridge as QVariant containers (signal args through v3c,
+    # Slot-return list in v3d); this removes that conversion path completely.
 
     def __init__(self):
         QObject.__init__(self)
         self.frames = {}
-        self.shown_count = 0   # instrumentation: frames handed to QML
+        self.revisions = {}
+        self.shown_count = 0   # instrumentation: frames made available to QML
         self.paint_count = 0   # instrumentation: trace-canvas paints actually executed
 
     def set_frame(self, effect_name, frames):
         self.frames[effect_name] = frames
+        self.revisions[effect_name] = self.revisions.get(effect_name, 0) + 1
         self.shown_count += 1
         # The sync metric is a pure-Python O(lags x samples) search; only spend
         # UI-thread time on it while a USB is mounted to collect the perf log.
         if _usb_present[0]:
             _update_sync_metric(effect_name, frames)
-        self.frameChanged.emit(effect_name, frames)
+
+    @Slot(str, result=int)
+    def frameRevision(self, effect_name):
+        return self.revisions.get(effect_name, 0)
+
+    @Slot(str, result=str)
+    def takeFramesJson(self, effect_name):
+        # Called at most once per revision bump (the poll compares revisions
+        # first), so the dumps cost is paid per new frame, not per poll tick.
+        return json.dumps(self.frames.get(effect_name) or [])
 
     @Slot(str)
     def notePainted(self, effect_name):
@@ -286,10 +301,20 @@ class ScopeFrames(QObject):
         # screen, so this counts real paints for the perf log.
         self.paint_count += 1
 
+    @Slot(float)
+    def noteQmlGc(self, duration_ms):
+        # Called from the QML diagnostic timer that forces a JS gc() every
+        # 30 s and times it. The pause of a forced collection measures the
+        # engine's live set + heap walk cost — the quantity the v3a/v3b logs
+        # show growing with uptime.
+        if duration_ms > _qgc_max[0]:
+            _qgc_max[0] = duration_ms
+
     def clear_frame(self, effect_name):
         if effect_name in self.frames:
             del self.frames[effect_name]
-        self.frameChanged.emit(effect_name, [])
+        # bump the revision so the poller notices and resets the traces
+        self.revisions[effect_name] = self.revisions.get(effect_name, 0) + 1
 
     @Slot(str)
     def clearEffect(self, effect_name):
@@ -309,7 +334,7 @@ def _usb_mounted():
 # skipped entirely when no USB is inserted).
 _usb_present = [False]
 
-_SCOPE_BUILD_TAG = "perf8"
+_SCOPE_BUILD_TAG = "v3f"
 
 
 def _ingen_sockq_bytes():
@@ -337,6 +362,31 @@ _perf_loops = [0]     # main-loop iterations
 # signature of a JS garbage-collection pause or another intermittent stall.
 _perf_pe_max = [0.0]
 _perf_pu_max = [0.0]
+
+# Python-GC attribution for the periodic pu_max spikes (~450 ms every ~26 s in
+# the perf8 log): gc.callbacks brackets every collection, the logger prints the
+# worst pause and its generation per 2s window. If pygc_max tracks the pu_max
+# spikes the stall is Python's gen-2 collector (fix: freeze + thresholds); if it
+# stays near zero the suspect is the QML JS heap (fix: typed-array frames).
+_pygc_t0 = [0.0]
+_pygc_max = [0.0]     # worst collection pause (ms) in the current 2s window
+_pygc_gen = [-1]      # generation of that worst pause
+_pygc_count = [0]     # collections in the current window
+_qgc_max = [0.0]      # worst FORCED QML JS gc() pause (ms) in the window
+
+
+def _pygc_callback(phase, info):
+    if phase == "start":
+        _pygc_t0[0] = time.monotonic()
+    else:
+        pause_ms = (time.monotonic() - _pygc_t0[0]) * 1000.0
+        _pygc_count[0] += 1
+        if pause_ms > _pygc_max[0]:
+            _pygc_max[0] = pause_ms
+            _pygc_gen[0] = info.get("generation", -1)
+
+
+gc.callbacks.append(_pygc_callback)
 
 # perf6: the temporary screen-grab diagnostic is gone. grabWindow() forced a
 # full synchronous window render + PNG encode + FAT write inside the UI loop
@@ -460,7 +510,10 @@ def _scope_perf_logger():
             _sync_sim_sum[0] = 0.0; _sync_count[0] = 0
             pe_max = _perf_pe_max[0]; pu_max = _perf_pu_max[0]
             _perf_pe_max[0] = 0.0; _perf_pu_max[0] = 0.0
-            line = ("t=%.0f recv/2s=%d rxskip/2s=%d sockq=%d shown/2s=%d painted/2s=%d queue=%d loops/2s=%d paint_ms=%.1f proc_ms=%.1f pe_max=%.0f pu_max=%.0f trig_ch=%d drift_avg=%.1f drift_max=%d sync=%.2f\n" % (
+            pygc_max = _pygc_max[0]; pygc_gen = _pygc_gen[0]; pygc_n = _pygc_count[0]
+            _pygc_max[0] = 0.0; _pygc_gen[0] = -1; _pygc_count[0] = 0
+            qgc_ms = _qgc_max[0]; _qgc_max[0] = 0.0
+            line = ("t=%.0f recv/2s=%d rxskip/2s=%d sockq=%d shown/2s=%d painted/2s=%d queue=%d loops/2s=%d paint_ms=%.1f proc_ms=%.1f pe_max=%.0f pu_max=%.0f trig_ch=%d drift_avg=%.1f drift_max=%d sync=%.2f pygc_max=%.0f pygc_gen=%d pygc_n=%d qgc_ms=%.0f\n" % (
                 time.monotonic(),
                 recv - last_recv, rxskip - last_rxskip, _ingen_sockq_bytes(),
                 shown - last_shown, painted - last_painted,
@@ -469,7 +522,8 @@ def _scope_perf_logger():
                 1000.0 * (pe - last_pe) / dloops,
                 1000.0 * (pu - last_pu) / dloops,
                 1000.0 * pe_max, 1000.0 * pu_max,
-                trig_ch + 1, drift_avg, drift_max, sim_avg))
+                trig_ch + 1, drift_avg, drift_max, sim_avg,
+                pygc_max, pygc_gen, pygc_n, qgc_ms))
             if _usb_present[0]:
                 with open("/usb_flash/scope_perf.log", "a") as f:
                     if not usb_was_present:
@@ -2711,6 +2765,11 @@ if __name__ == "__main__":
     # ingen_wrapper._FINISH = True
     update_dsp_usage_count = 500
     num_loops = 0
+    # Scheduling levers measured and rejected: setswitchinterval(0.002) was a
+    # no-op (v3c — C extension calls hold the GIL regardless of the bytecode
+    # quantum) and an explicit sleep(1 ms) yield bought no recv either while
+    # costing ~5 loops/s (v3d). recv is pinned at ~18/s by total CPU
+    # saturation, not scheduling.
     while not EXIT_PROCESS[0]:
         # debug_print("processing events")
         try:

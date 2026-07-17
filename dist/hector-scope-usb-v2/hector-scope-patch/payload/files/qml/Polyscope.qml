@@ -9,7 +9,7 @@ Item {
     height: 620
 
     property string effect: "scope1"
-    property string scopeBuild: "perf8"   // shown in SETUP so the running build is verifiable
+    property string scopeBuild: "v3f"   // shown in SETUP so the running build is verifiable
     property string uiPage: "main"        // "main" | "setup" | "channel" | "fullscreen"
     property int activeChannel: 0          // 0..3, channel shown on the channel page
     property bool autoTrigger: false       // auto-track the trigger threshold to the SYNC'd channel midpoint
@@ -122,7 +122,9 @@ Item {
     }
 
     function shiftTrace(trace, delta) {
-        var output = new Array(trace.length)
+        // Float32Array: one heap object + unboxed storage, vs a JS array
+        // whose slots feed the QV4 GC churn this build is eliminating.
+        var output = new Float32Array(trace.length)
         for (var index = 0; index < trace.length; ++index) {
             output[index] = trace[index] + delta
         }
@@ -148,13 +150,41 @@ Item {
     // set false to fall back to the perf2 single-thread paint path.
     property bool threadedTracePaint: true
     function requestRender() { _paintDirty = true }
+    // Persistence-ghost vertex decimation: the newest trace (historyIndex 0)
+    // always strokes at full resolution; faded ghosts stroke every 2nd
+    // vertex, deep ghosts every 3rd. On MED persistence this removes ~a
+    // third of the stroked segments per paint, on MAX about half.
+    function ghostStride(historyIndex) {
+        return historyIndex === 0 ? 1 : (historyIndex >= 3 ? 3 : 2)
+    }
     function requestGridRender() { _gridDirty = true }
+
+    property int _lastFrameRev: -1
 
     Timer {
         interval: 33        // ~30 FPS cap
         repeat: true
         running: true
         onTriggered: {
+            // v3e: poll for fresh frames instead of receiving them through a
+            // per-frame signal. frameRevision() returns an int (primitive —
+            // no container conversion); new data is pulled as a JSON string
+            // and JSON.parse builds pure JS objects entirely inside the JS
+            // engine. The v3b/v3d logs proved the ~0.5 ms/s live-set growth
+            // follows frame delivery however the payload crosses the bridge
+            // as QVariant containers; this removes that path completely.
+            var rev = scopeFrames.frameRevision(scopeView.effect)
+            if (rev !== scopeView._lastFrameRev) {
+                scopeView._lastFrameRev = rev
+                if (!scopeView.freeze) {
+                    var pulled = JSON.parse(scopeFrames.takeFramesJson(scopeView.effect))
+                    if (!pulled || pulled.length < 4) {
+                        scopeView.resetTraceState()
+                    } else {
+                        scopeView.setFrames(pulled)
+                    }
+                }
+            }
             if (scopeView._gridDirty) {
                 scopeView._gridDirty = false
                 gridCanvas.requestPaint()
@@ -163,6 +193,23 @@ Item {
                 scopeView._paintDirty = false
                 chart.requestPaint()
             }
+        }
+    }
+
+    Timer {
+        // DIAGNOSTIC (v3c): both v3a and v3b logs show the engine's GC pause
+        // growing linearly with uptime (~0.5 ms/s, same curve in both builds),
+        // i.e. the live set or heap footprint grows without bound. Forcing a
+        // collection on a fixed beat and timing it turns that growth into a
+        // clean curve in the perf log (qgc_ms), independent of when the
+        // organic GC happens to fire.
+        interval: 30000
+        repeat: true
+        running: true
+        onTriggered: {
+            var gcStart = Date.now()
+            gc()
+            scopeFrames.noteQmlGc(Date.now() - gcStart)
         }
     }
 
@@ -291,8 +338,8 @@ Item {
         rawTraces = normalizeFrames(frames)
         registerFrameArrival(traceLength(rawTraces))
 
-        // v2 payloads carry the envelope and plugin-measured frequencies
-        // after the 4 point traces; v1 payloads leave these cleared.
+        // v2/v3 payloads carry the envelope and plugin-measured frequencies
+        // after the 4 point traces; a cleared frame ([]) leaves these unset.
         if (frames.length >= 12) {
             var nextMin = [frames[4], frames[5], frames[6], frames[7]]
             var nextMax = [frames[8], frames[9], frames[10], frames[11]]
@@ -360,8 +407,9 @@ Item {
         var nextSignificant = [false, false, false, false]
         for (var channel = 0; channel < 4; ++channel) {
             nextStats[channel] = traceStatsFor(processedCurrent[channel])
-            // Plugin-measured frequency (v2) is alias-free; the JS estimate
-            // from the decimated frame stays as the v1 fallback.
+            // Plugin-measured frequency (v2/v3) is alias-free; the JS estimate
+            // from the decimated frame stays as the fallback when the plugin
+            // reports 0 Hz.
             if (pluginFreqs.length > channel && pluginFreqs[channel] > 0.0) {
                 nextStats[channel].frequency = pluginFreqs[channel]
             }
@@ -676,9 +724,9 @@ Item {
         }
         offset /= trace.length
 
-        var output = []
+        var output = new Float32Array(trace.length)
         for (index = 0; index < trace.length; ++index) {
-            output.push(trace[index] - offset)
+            output[index] = trace[index] - offset
         }
         return output
     }
@@ -1087,13 +1135,19 @@ Item {
         ctx.restore()
     }
 
-    function drawScopeTrace(ctx, trace, top, rowHeight, color, alpha, drawWidth) {
+    function drawScopeTrace(ctx, trace, top, rowHeight, color, alpha, drawWidth, stride) {
         var centerY = top + rowHeight / 2
         var amplitude = rowHeight * 0.37
 
         if (trace.length === 0) {
             return
         }
+        // stride > 1 = ghost decimation: faded persistence layers carry no
+        // measurement information (stats/trigger/envelope always use the
+        // full-resolution series), so halving their vertices halves their
+        // stroke cost on the software rasteriser. Decimated points keep
+        // their true x positions and the final sample is always drawn.
+        var step = (stride === undefined || stride < 1) ? 1 : stride
 
         // Single thin stroke, tuned for the software rasteriser. Stroke cost is
         // arc-length x lineWidth, and round joins fill an arc at EVERY vertex
@@ -1108,8 +1162,9 @@ Item {
         ctx.lineJoin = "bevel"
         ctx.lineCap = "butt"
         ctx.beginPath()
-        for (var index = 0; index < trace.length; ++index) {
-            var x = trace.length === 1 ? drawWidth / 2 : (drawWidth * index) / (trace.length - 1)
+        var last = trace.length - 1
+        for (var index = 0; index <= last; index += step) {
+            var x = last === 0 ? drawWidth / 2 : (drawWidth * index) / last
             var y = centerY - (Math.max(-1.0, Math.min(1.0, trace[index] * displayGain)) * amplitude)
             if (index === 0) {
                 ctx.moveTo(x, y)
@@ -1117,15 +1172,22 @@ Item {
                 ctx.lineTo(x, y)
             }
         }
+        if (step > 1 && last > 0 && last % step !== 0) {
+            ctx.lineTo(drawWidth,
+                       centerY - (Math.max(-1.0, Math.min(1.0, trace[last] * displayGain)) * amplitude))
+        }
         ctx.stroke()
         ctx.restore()
     }
 
-    function drawXYTrace(ctx, xTrace, yTrace, left, top, plotWidth, plotHeight, color, alpha) {
+    function drawXYTrace(ctx, xTrace, yTrace, left, top, plotWidth, plotHeight, color, alpha, stride) {
         var pointCount = Math.min(xTrace.length, yTrace.length)
         if (pointCount < 2) {
             return
         }
+        // stride > 1 = ghost decimation (see drawScopeTrace). XY stroke cost
+        // is arc-length-bound, so ghosts gain the most here.
+        var step = (stride === undefined || stride < 1) ? 1 : stride
 
         // Single pass (was a 3-pass 7px/2.1px/0.9px glow). Same software-canvas
         // cost rule as the time-domain trace: one thin bevel/butt stroke instead
@@ -1142,7 +1204,8 @@ Item {
         ctx.lineWidth = 1.0
         ctx.beginPath()
         var x, y
-        for (var index = 0; index < pointCount; ++index) {
+        var lastPoint = pointCount - 1
+        for (var index = 0; index <= lastPoint; index += step) {
             x = left + ((Math.max(-1.0, Math.min(1.0, xTrace[index] * displayGain)) + 1.0) * 0.5 * plotWidth)
             y = top + plotHeight - ((Math.max(-1.0, Math.min(1.0, yTrace[index] * displayGain)) + 1.0) * 0.5 * plotHeight)
             if (index === 0) {
@@ -1150,6 +1213,11 @@ Item {
             } else {
                 ctx.lineTo(x, y)
             }
+        }
+        if (step > 1 && lastPoint % step !== 0) {
+            x = left + ((Math.max(-1.0, Math.min(1.0, xTrace[lastPoint] * displayGain)) + 1.0) * 0.5 * plotWidth)
+            y = top + plotHeight - ((Math.max(-1.0, Math.min(1.0, yTrace[lastPoint] * displayGain)) + 1.0) * 0.5 * plotHeight)
+            ctx.lineTo(x, y)
         }
         ctx.stroke()
 
@@ -1340,25 +1408,6 @@ Item {
         disableNotifyBroadcast()
     }
 
-    Connections {
-        target: scopeFrames
-        onFrameChanged: {
-            if (arguments[0] !== scopeView.effect || scopeView.freeze) {
-                return
-            }
-
-            // arguments[1] is already a JS array (QVariantList from Python),
-            // no JSON.parse needed.
-            var frames = arguments[1]
-            if (!frames || frames.length < 4) {
-                scopeView.resetTraceState()
-                return
-            }
-
-            scopeView.setFrames(frames)
-        }
-    }
-
     Rectangle {
         anchors.fill: parent
         radius: 8
@@ -1500,7 +1549,8 @@ Item {
                             scopeView.xyPlotSize,
                             scopeView.xyPlotSize,
                             scopeView.channelColors[xChannel],
-                            alpha
+                            alpha,
+                            scopeView.ghostStride(historyIndex)
                         )
                     }
                 } else if (scopeView.viewMode === 1) {
@@ -1552,7 +1602,8 @@ Item {
                                 drawHeight,
                                 scopeView.channelColors[overlayChannel],
                                 alpha,
-                                drawWidth
+                                drawWidth,
+                                scopeView.ghostStride(historyIndex)
                             )
                         }
                     }
@@ -1605,7 +1656,8 @@ Item {
                                 rowHeight,
                                 scopeView.channelColors[channel],
                                 alpha,
-                                drawWidth
+                                drawWidth,
+                                scopeView.ghostStride(historyIndex)
                             )
                         }
                         scopeView.drawHoldMarkers(ctx, top, rowHeight, scopeView.holdMarkers[channel], scopeView.channelColors[channel], drawWidth, 0)

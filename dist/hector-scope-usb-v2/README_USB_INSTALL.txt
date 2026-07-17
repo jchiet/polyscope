@@ -29,8 +29,9 @@ USB layout (copy everything to a FAT32 USB root):
     payload/
       manifest.json
       files/      (patched module_info.py, show_widget.py, ingen_wrapper.py,
-                   headless.py, qml/PatchBayEffect.qml, qml/Scope.qml)
-      lv2/poly_scope.lv2/  (poly_scope.so, poly_scope.ttl, manifest.ttl)
+                   headless.py, qml/PatchBayEffect.qml, qml/Polyscope.qml,
+                   scope_util.py)
+      lv2/poly_scope2.lv2/  (poly_scope2.so, poly_scope2.ttl, manifest.ttl)
 
 Install:
   1. Boot Hector normally on firmware 407.

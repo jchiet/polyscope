@@ -15,51 +15,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$SCRIPT_DIR/source/polyeffects-src"
 UI="$SRC/digit_ui"
-PLUGIN="$SRC/PolyLV2/poly_scope.lv2"
 OUT="$SCRIPT_DIR/dist/hector-scope-usb-v2"
 
 # Files replaced in place (must match a known 407 baseline).
 REPLACE_CRITICAL=(module_info.py show_widget.py ingen_wrapper.py qml/PatchBayEffect.qml)
 REPLACE_OPTIONAL=(headless.py)
-NEW_FILES=(qml/Scope.qml qml/Polyscope.qml scope_util.py)
+NEW_FILES=(qml/Polyscope.qml scope_util.py)
 
 sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
 sha_git() { git -C "$UI" show "HEAD:$1" | shasum -a 256 | cut -d' ' -f1; }
 
 echo "=== Building HectorScope USB installer v2 (checksum-gated) ==="
 
-# ── 1. Clean-rebuild the fixed plugin ────────────────────────────────
+# ── 1. Clean-rebuild the scope plugin ───────────────────────────────────────
 
-SO="$PLUGIN/build/poly_scope.so"
-echo "Rebuilding poly_scope.so (with forge_pop fix)..."
-if command -v zig >/dev/null 2>&1 && pkg-config --exists lv2 2>/dev/null \
-   && [ -x /opt/homebrew/opt/llvm/bin/llvm-strip ]; then
-  ( cd "$PLUGIN"
-    make clean >/dev/null
-    ZIG_GLOBAL_CACHE_DIR="${TMPDIR:-/tmp}/zig-global-cache" \
-    ZIG_LOCAL_CACHE_DIR="${TMPDIR:-/tmp}/zig-local-cache" \
-    make UNAME=Linux CC='zig cc -target aarch64-linux-gnu' \
-         STRIP='/opt/homebrew/opt/llvm/bin/llvm-strip' >/dev/null )
-  echo "  rebuilt."
-elif [ -f "$SO" ]; then
-  echo "  zig toolchain unavailable; using existing $SO"
-else
-  echo "ERROR: no poly_scope.so and cannot cross-compile. Install zig + lv2 + llvm." >&2
-  exit 1
-fi
-
-# Verify it is the fixed source and an ARM64 ELF.
-if ! grep -q "lv2_atom_forge_pop" "$PLUGIN/poly_scope.c"; then
-  echo "ERROR: forge_pop fix missing from poly_scope.c" >&2
-  exit 1
-fi
-fout="$(file "$SO")"
-case "$fout" in
-  *"ARM aarch64"*|*"ARM64"*) echo "  plugin OK: $fout" ;;
-  *) echo "ERROR: poly_scope.so is not ARM64: $fout" >&2; exit 1 ;;
-esac
-
-# Clean-rebuild the second plugin (polyscope) the same way.
 PLUGIN2_BUILD="$SRC/PolyLV2/poly_scope2.lv2"
 SO2_BUILD="$PLUGIN2_BUILD/build/poly_scope2.so"
 echo "Rebuilding poly_scope2.so (polyscope)..."
@@ -96,7 +65,7 @@ echo "  all compile."
 
 rm -rf "$OUT"
 PAY="$OUT/hector-scope-patch/payload"
-mkdir -p "$PAY/files/qml" "$PAY/lv2/poly_scope.lv2"
+mkdir -p "$PAY/files/qml" "$PAY/lv2/poly_scope2.lv2"
 
 # Copy patched + new files into payload/files preserving layout.
 for f in "${REPLACE_CRITICAL[@]}" "${REPLACE_OPTIONAL[@]}" "${NEW_FILES[@]}"; do
@@ -112,17 +81,11 @@ for f in module_info.py show_widget.py ingen_wrapper.py headless.py qml/PatchBay
 done
 echo "  staged pristine originals into install payload"
 
-# Copy LV2 bundle.
-cp "$SO" "$PAY/lv2/poly_scope.lv2/poly_scope.so"
-cp "$PLUGIN/poly_scope.ttl" "$PAY/lv2/poly_scope.lv2/poly_scope.ttl"
-cp "$PLUGIN/manifest.ttl" "$PAY/lv2/poly_scope.lv2/manifest.ttl"
-
-# Second LV2 bundle (polyscope)
+# LV2 bundle (polyscope)
 PLUGIN2="$SRC/PolyLV2/poly_scope2.lv2"
 SO2="$PLUGIN2/build/poly_scope2.so"
 fout2="$(file "$SO2")"
 case "$fout2" in *"ARM aarch64"*|*"ARM64"*) : ;; *) echo "ERROR: poly_scope2.so not ARM64: $fout2" >&2; exit 1 ;; esac
-mkdir -p "$PAY/lv2/poly_scope2.lv2"
 cp "$SO2" "$PAY/lv2/poly_scope2.lv2/poly_scope2.so"
 cp "$PLUGIN2/poly_scope2.ttl" "$PAY/lv2/poly_scope2.lv2/poly_scope2.ttl"
 cp "$PLUGIN2/manifest.ttl" "$PAY/lv2/poly_scope2.lv2/manifest.ttl"
@@ -157,11 +120,6 @@ cp "$SCRIPT_DIR/install_scope.py" "$OUT/hector-scope-patch/install_scope.py"
   echo ""
   echo "  },"
   echo '  "lv2": {'
-  echo '    "poly_scope.lv2": {'
-  printf '      "poly_scope.so": "%s",\n' "$(sha "$SO")"
-  printf '      "poly_scope.ttl": "%s",\n' "$(sha "$PLUGIN/poly_scope.ttl")"
-  printf '      "manifest.ttl": "%s"\n' "$(sha "$PLUGIN/manifest.ttl")"
-  echo '    },'
   echo '    "poly_scope2.lv2": {'
   printf '      "poly_scope2.so": "%s",\n' "$(sha "$SO2")"
   printf '      "poly_scope2.ttl": "%s",\n' "$(sha "$PLUGIN2/poly_scope2.ttl")"
@@ -436,29 +394,34 @@ USB layout (copy everything to a FAT32 USB root):
     payload/
       manifest.json
       files/      (patched module_info.py, show_widget.py, ingen_wrapper.py,
-                   headless.py, qml/PatchBayEffect.qml, qml/Scope.qml)
-      lv2/poly_scope.lv2/  (poly_scope.so, poly_scope.ttl, manifest.ttl)
+                   headless.py, qml/PatchBayEffect.qml, qml/Polyscope.qml,
+                   scope_util.py)
+      lv2/poly_scope2.lv2/  (poly_scope2.so, poly_scope2.ttl, manifest.ttl)
 
 Install:
   1. Boot Hector normally on firmware 407.
-  2. Insert the USB drive.
-  3. Settings -> QA CHECK -> Run debug. (Press it ONCE and wait.)
-  4. Wait for the "SUCCESS ... installed and verified" message. The unit may
-     NOT power off by itself in the QA debug context -- that is expected.
-  5. Manually POWER OFF the unit, REMOVE the USB, then power on.
-     (Do not boot with the USB inserted. Do not press Run debug repeatedly.)
-  6. Add a "scope" module in the patch bay.
+  2. Insert the USB drive. THE INSTALLER RUNS AUTOMATICALLY -- no menu
+     interaction is needed. (Fallback if nothing happens within ~30s:
+     Settings -> QA CHECK -> Run debug, pressed ONCE.)
+  3. The unit REBOOTS ITSELF when the install finishes.
+  4. IMPORTANT: the moment the screen goes black (reboot starting),
+     REMOVE THE USB STICK. If it stays inserted, the unit re-runs the
+     installer on every boot and looks stuck in an update/reboot loop.
+     Nothing is damaged -- just remove the stick and let it boot.
+  5. Add a "scope" module in the patch bay.
 
-Note: the installer takes only a few seconds. It now uses a lock so that even
-if the debug runner launches it more than once, only one instance runs and the
-rest exit immediately. A completion marker makes repeat launches a no-op.
+Note: the installer takes only a few seconds. It uses a lock so that even if
+the runner launches it more than once, only one instance runs and the rest
+exit immediately. A completion marker makes repeat launches a no-op.
 
 If it reports a checksum mismatch and aborts:
   Your unit is untouched. Copy /usb_flash/hector_scope_install.log off the USB
   and share it so the package can be re-targeted for your exact firmware.
 
 Recovery (separate USB: hector-scope-recovery-usb-v2):
-  Settings -> QA CHECK -> Run debug. Restores backups and removes the plugin.
+  Same handling: insert the stick, it runs automatically, and the unit
+  reboots. Remove the stick as soon as the screen goes black. Restores the
+  backups and removes the plugin.
 README
 
 ( cd "$OUT"
@@ -472,4 +435,5 @@ echo "Install USB : $OUT/"
 echo "Recovery USB: $REC/"
 echo
 echo "Copy the CONTENTS of the install folder to a FAT32 USB root,"
-echo "then on Hector: Settings -> QA CHECK -> Run debug."
+echo "then insert into a booted Hector: it installs automatically and reboots."
+echo "Remove the stick the moment the screen goes black, or it will loop."

@@ -29,10 +29,12 @@
 #define SCOPE_CHANNELS 4
 #define SCOPE_FRAME_SAMPLES 192
 #define SCOPE_HISTORY_SAMPLES 384
-/* v2 packet: header (magic|ver|count|4 freqs) + 3 series (point/min/max)
-   per channel. The min/max series give the UI an honest under-sampling
-   envelope; the freqs are measured here from the full-rate signal, so the
-   readouts cannot alias. */
+/* v3 packet: header (magic|ver|count|4 freqs) + 3 series (point/min/max)
+   per channel, each series packed 12-bit base64 (2 samples -> 3 bytes -> 4
+   chars, i.e. SCOPE_FRAME_SAMPLES * 2 chars — same size the old hex format
+   had). The min/max series give the UI an honest under-sampling envelope;
+   the freqs are measured here from the full-rate signal, so the readouts
+   cannot alias. */
 #define SCOPE_NOTIFY_SERIES 3
 #define SCOPE_NOTIFY_HEADER_MAX 96
 #define SCOPE_NOTIFY_TEXT_MAX (SCOPE_NOTIFY_HEADER_MAX + (SCOPE_CHANNELS * SCOPE_NOTIFY_SERIES * ((SCOPE_FRAME_SAMPLES * 2) + 1)) + 1)
@@ -149,17 +151,60 @@ clamp_unit(float value)
 	return value;
 }
 
-static inline uint8_t
-encode_sample(float value)
+static inline uint16_t
+encode_sample_12(float value)
 {
 	const float normalized = (clamp_unit(value) * 0.5f) + 0.5f;
-	return (uint8_t)lrintf(normalized * 255.0f);
+	int32_t q = (int32_t)lrintf(normalized * 4095.0f);
+	if (q < 0) { q = 0; }
+	if (q > 4095) { q = 4095; }
+	return (uint16_t)q;
 }
 
-static inline char
-hex_nibble(uint8_t value)
+/* Pack two 12-bit samples into 3 bytes. Shared by the notify loop and the
+   host golden harness so the tested path IS the shipped path. */
+static inline void
+pack_pair_12(uint16_t s0, uint16_t s1, uint8_t* out)
 {
-	return value < 10 ? (char)('0' + value) : (char)('A' + (value - 10));
+	out[0] = (uint8_t)(s0 & 0xFF);
+	out[1] = (uint8_t)(((s0 >> 8) & 0x0F) | ((s1 & 0x0F) << 4));
+	out[2] = (uint8_t)((s1 >> 4) & 0xFF);
+}
+
+static const char POLY_B64[] =
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/* Encode `len` bytes to base64 at `out`; returns pointer past the last char.
+   192 samples pack to 288 bytes (divisible by 3), so the hot path never pads;
+   the tail cases are kept for safety at other sample counts. */
+static char*
+poly_b64_encode(char* out, const uint8_t* in, uint32_t len)
+{
+	uint32_t i = 0;
+	while (i + 3 <= len) {
+		const uint32_t n = ((uint32_t)in[i] << 16)
+		                 | ((uint32_t)in[i + 1] << 8)
+		                 |  (uint32_t)in[i + 2];
+		*out++ = POLY_B64[(n >> 18) & 0x3F];
+		*out++ = POLY_B64[(n >> 12) & 0x3F];
+		*out++ = POLY_B64[(n >> 6) & 0x3F];
+		*out++ = POLY_B64[n & 0x3F];
+		i += 3;
+	}
+	if (i + 1 == len) {
+		const uint32_t n = (uint32_t)in[i] << 16;
+		*out++ = POLY_B64[(n >> 18) & 0x3F];
+		*out++ = POLY_B64[(n >> 12) & 0x3F];
+		*out++ = '=';
+		*out++ = '=';
+	} else if (i + 2 == len) {
+		const uint32_t n = ((uint32_t)in[i] << 16) | ((uint32_t)in[i + 1] << 8);
+		*out++ = POLY_B64[(n >> 18) & 0x3F];
+		*out++ = POLY_B64[(n >> 12) & 0x3F];
+		*out++ = POLY_B64[(n >> 6) & 0x3F];
+		*out++ = '=';
+	}
+	return out;
 }
 
 static uint32_t
@@ -296,11 +341,13 @@ current_frequency(const PolyScope* plugin, uint32_t channel)
 static uint32_t
 build_notify_packet(PolyScope* plugin)
 {
-	/* v2: header carries the plugin-measured (alias-free) frequencies, and
-	   each channel sends point, bucket-min and bucket-max series. */
+	/* v3: header carries the plugin-measured (alias-free) frequencies, and
+	   each channel sends point, bucket-min and bucket-max series, quantized
+	   to 12-bit and packed 2-per-3-bytes as base64 (384 chars per series at
+	   192 samples). */
 	int written = snprintf(plugin->notify_text,
 	                       sizeof(plugin->notify_text),
-	                       "PSCP|2|%u|%.2f,%.2f,%.2f,%.2f",
+	                       "PSCP|3|%u|%.2f,%.2f,%.2f,%.2f",
 	                       SCOPE_FRAME_SAMPLES,
 	                       current_frequency(plugin, 0),
 	                       current_frequency(plugin, 1),
@@ -321,12 +368,28 @@ build_notify_packet(PolyScope* plugin)
 		};
 		for (uint32_t series = 0; series < SCOPE_NOTIFY_SERIES; ++series) {
 			*cursor++ = '|';
-			for (uint32_t sample = 0; sample < SCOPE_FRAME_SAMPLES; ++sample) {
-				const uint32_t ring = logical_index_to_ring(plugin, frame_start + sample);
-				const uint8_t encoded = encode_sample(stores[series][channel][ring]);
-				*cursor++ = hex_nibble((uint8_t)(encoded >> 4));
-				*cursor++ = hex_nibble((uint8_t)(encoded & 0x0F));
+			uint8_t packed[(SCOPE_FRAME_SAMPLES * 3 + 1) / 2];
+			uint32_t byte_index = 0;
+			uint32_t sample = 0;
+			while (sample + 1 < SCOPE_FRAME_SAMPLES) {
+				const uint32_t ring0 =
+					logical_index_to_ring(plugin, frame_start + sample);
+				const uint32_t ring1 =
+					logical_index_to_ring(plugin, frame_start + sample + 1);
+				pack_pair_12(encode_sample_12(stores[series][channel][ring0]),
+				             encode_sample_12(stores[series][channel][ring1]),
+				             packed + byte_index);
+				byte_index += 3;
+				sample += 2;
 			}
+			if (sample < SCOPE_FRAME_SAMPLES) {          /* odd tail */
+				const uint32_t ring0 =
+					logical_index_to_ring(plugin, frame_start + sample);
+				const uint16_t s0 = encode_sample_12(stores[series][channel][ring0]);
+				packed[byte_index++] = (uint8_t)(s0 & 0xFF);
+				packed[byte_index++] = (uint8_t)((s0 >> 8) & 0x0F);
+			}
+			cursor = poly_b64_encode(cursor, packed, byte_index);
 		}
 	}
 

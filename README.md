@@ -4,8 +4,9 @@ A four-channel digital oscilloscope for the **Poly Effects Hector** eurorack
 module. Community firmware patch: a custom full-screen scope UI, a new LV2
 scope plugin, and a checksum-gated USB installer with full backup/recovery.
 
-> **Current stable: `v1.2.0-perf8`** — grab the installer from the GitHub
-> release assets. Previous fallbacks: `v1.1-perf7-stable`, `v1.0-perf5-stable`.
+> **Current stable: `v2.0.0`** (on-device build tag `v3f`) — grab the
+> installer from the GitHub release assets. Previous fallbacks: `v1.2.0-perf8`,
+> `v1.1-perf7-stable`. See [CHANGELOG.md](CHANGELOG.md) for what's new.
 
 ## Features
 
@@ -27,9 +28,12 @@ scope plugin, and a checksum-gated USB installer with full backup/recovery.
 - **Persistence** (5 levels) with afterglow envelope, **intensity** control,
   **measurement cursors** (fullscreen), **AUTOSET**, **FREEZE/RUN**, and a
   fullscreen trace viewer (tap the trace)
+- **12-bit trace resolution** (4096 amplitude steps — visibly smoother
+  slow CV at high zoom) at zero extra bandwidth
 - Engineered for responsiveness on the Hector's CPU: threaded trace
-  rendering, layered static/dynamic canvases, bulk socket ingest —
-  sub-200 ms input-to-display latency at roughly 8–12 fps
+  rendering, layered static/dynamic canvases, bulk socket ingest, and a
+  constant-memory frame path — no growing stutter, no matter how long the
+  session runs
 
 ## Requirements
 
@@ -54,7 +58,7 @@ scope plugin, and a checksum-gated USB installer with full backup/recovery.
    stuck in an update/reboot loop. Nothing is damaged — remove the stick
    and let it boot normally.
 6. Verify: open the scope module, go to **SETUP** — the footer must read
-   **polyscope perf8**.
+   **polyscope v3f**.
 
 The installer backs up every original file on the device *and* onto the USB
 stick before changing anything, verifies every write, and rolls back

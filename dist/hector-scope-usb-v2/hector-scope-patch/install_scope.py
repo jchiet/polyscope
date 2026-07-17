@@ -45,7 +45,7 @@ BACKUP_DIR = os.path.join(UI_DIR, ".hector_scope_backup_v2")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PAYLOAD_DIR = os.path.join(SCRIPT_DIR, "payload")
 MANIFEST_PATH = os.path.join(PAYLOAD_DIR, "manifest.json")
-PACKAGE_VERSION = "perf8"
+PACKAGE_VERSION = "v3f"
 PRISTINE_DIR = os.path.join(PAYLOAD_DIR, "originals")   # baseline files carried on the USB
 MARKER_PATH = os.path.join(UI_DIR, ".hector_scope_v2_done")
 
@@ -388,6 +388,23 @@ def reset_to_pristine(manifest, dry_run):
             else:
                 os.remove(dev)
                 log(f"  removed {rel}")
+    # The legacy scope was removed in v3a: clean up everything an older
+    # install left behind — its UI file and its DSP bundle (no presets in
+    # the wild reference the legacy module, per the user 2026-07-16).
+    legacy_qml = os.path.join(UI_DIR, "qml", "Scope.qml")
+    if os.path.isfile(legacy_qml):
+        if dry_run:
+            log("  would remove legacy qml/Scope.qml")
+        else:
+            os.remove(legacy_qml)
+            log("  removed legacy qml/Scope.qml")
+    legacy_bundle = os.path.join(LV2_DIR, "poly_scope.lv2")
+    if os.path.isdir(legacy_bundle):
+        if dry_run:
+            log("  would remove legacy poly_scope.lv2")
+        else:
+            shutil.rmtree(legacy_bundle)
+            log("  removed legacy poly_scope.lv2")
     for bundle in manifest["lv2"]:
         bdir = os.path.join(LV2_DIR, bundle)
         if os.path.isdir(bdir):
@@ -441,7 +458,7 @@ def install(dry_run):
         log("Step 1/5: Replacing baseline UI files with patched versions")
         apply_replace(manifest, plan, tx, dry_run)
 
-        log("Step 2/5: Installing new files (Scope.qml)")
+        log("Step 2/5: Installing new files (Polyscope.qml, scope_util.py)")
         apply_new_files(manifest, tx, dry_run)
 
         log("Step 3/5: Installing LV2 plugin bundle")
