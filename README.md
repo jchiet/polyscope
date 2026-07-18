@@ -1,8 +1,12 @@
-# HectorScope
+# Polyscope
 
 A four-channel digital oscilloscope for the **Poly Effects Hector** eurorack
 module. Community firmware patch: a custom full-screen scope UI, a new LV2
 scope plugin, and a checksum-gated USB installer with full backup/recovery.
+
+> Formerly *HectorScope*. Renamed to match the module's on-device name
+> (`polyscope`, shown on the SETUP page). Old GitHub links redirect
+> automatically.
 
 > **Current stable: `v2.0.0`** (on-device build tag `v3f`) — grab the
 > installer from the GitHub release assets. Previous fallbacks: `v1.2.0-perf8`,
@@ -44,7 +48,7 @@ scope plugin, and a checksum-gated USB installer with full backup/recovery.
 
 ## Install
 
-1. Download `HectorScope-USB-installer-…zip` from the latest release and
+1. Download `Polyscope-USB-installer-…zip` from the latest release and
    unzip it.
 2. Copy the **contents** of `hector-scope-usb-v2/` to the **root** of a
    FAT32 USB stick (so `debug.sh` and `hector-scope-patch/` sit at the top
